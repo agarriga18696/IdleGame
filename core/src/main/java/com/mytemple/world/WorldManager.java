@@ -16,7 +16,7 @@ public class WorldManager {
 		regions.put("Europa del Este", new Region("Europa del Este", 250_000_000L, 0.018f));
 		regions.put("África", new Region("África", 1_300_000_000L, 0.005f));
 		regions.put("Oriente Medio", new Region("Oriente Medio", 500_000_000L, 0.01f));
-		regions.put("Asia", new Region("Asia", 4_000_000_000L, 0.008f));  // ← AHORA SÍ FUNCIONA
+		regions.put("Asia", new Region("Asia", 4_000_000_000L, 0.008f));
 		regions.put("Oceanía", new Region("Oceanía", 30_000_000L, 0.02f));
 	}
 

@@ -5,7 +5,6 @@ import com.badlogic.gdx.Screen;
 import com.badlogic.gdx.graphics.Color;
 import com.badlogic.gdx.graphics.Cursor.SystemCursor;
 import com.badlogic.gdx.graphics.GL20;
-import com.badlogic.gdx.graphics.Pixmap;
 import com.badlogic.gdx.graphics.Texture;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.scenes.scene2d.Stage;
@@ -13,9 +12,14 @@ import com.badlogic.gdx.scenes.scene2d.ui.Label;
 import com.badlogic.gdx.scenes.scene2d.ui.Skin;
 import com.badlogic.gdx.utils.viewport.ScreenViewport;
 import com.mytemple.CultIdleGame;
-
-import java.util.HashMap;
-import java.util.Map;
+import com.mytemple.graphics.WaterShader;
+import com.mytemple.managers.DayNightCycleManager;
+import com.mytemple.managers.FontManager;
+import com.mytemple.managers.GameClock;
+import com.mytemple.managers.MapManager;
+import com.mytemple.managers.RegionManager;
+import com.mytemple.managers.RegionSelector;
+import com.mytemple.ui.GameUI;
 
 public class GameScreen implements Screen {
 
@@ -24,20 +28,18 @@ public class GameScreen implements Screen {
 	private Stage stage;
 	private Skin skin;
 	private SpriteBatch batch;
-	private Texture worldMap;
-	private Map<String, Texture> regionTextures;
-	private Map<String, Pixmap> regionPixmaps;
+	private MapManager mapManager;
+	private RegionSelector regionSelector;
+	private WaterShader waterShader;
+	private GameUI gameUI;
+	private GameClock gameClock;
+	private DayNightCycleManager dayNightCycleManager;
+	private Label dateLabel;
+	private Label clockLabel;
 	private Label regionLabel;
-	private int mapWidth, mapHeight;
 	private String selectedRegion = null;
-
-	private static final String[] REGIONS = {
-			"Northern Africa", "Eastern Africa", "Western Africa", "Middle Africa", "Southern Africa",
-			"United States", "Canada", "Greenland", "Central America", "Caribbean", "Southern America",
-			"Northern Europe", "Western Europe", "Eastern Europe", "Southern Europe",
-			"Central Asia", "Eastern Asia", "Western Asia", "Southern Asia", "South-eastern Asia",
-			"Russia", "Oceania"
-	};
+	private String hoveredRegion = null;
+	private boolean allowSelection = false;
 
 	// Constructor.
 	public GameScreen(CultIdleGame game) {
@@ -46,27 +48,32 @@ public class GameScreen implements Screen {
 		this.stage = new Stage(new ScreenViewport());
 		Gdx.input.setInputProcessor(stage);
 		this.skin = game.getSkin();
+		this.mapManager = new MapManager();
+		this.gameClock = new GameClock();
+		this.dayNightCycleManager = new DayNightCycleManager(mapManager);
 
-		// Cargar la imagen base del mapa.
-		worldMap = new Texture(Gdx.files.internal("ui/map/world_map.png"));
-		mapWidth = worldMap.getWidth();
-		mapHeight = worldMap.getHeight();
+		regionSelector = new RegionSelector(mapManager.getRegionPixmaps(), mapManager.getMapWidth(), mapManager.getMapHeight());
+		waterShader = new WaterShader();
+		gameUI = new GameUI(stage, skin);
 
-		// Cargar imágenes de cada región.
-		regionTextures = new HashMap<>();
-		regionPixmaps = new HashMap<>();
-
-		for (String region : REGIONS) {
-			String path = "ui/map/" + region + ".png";
-			Texture texture = new Texture(Gdx.files.internal(path));
-			regionTextures.put(region, texture);
-			regionPixmaps.put(region, new Pixmap(Gdx.files.internal(path)));
-		}
-
-		// Etiqueta para mostrar la región seleccionada.
-		regionLabel = new Label("Selecciona una región", skin);
-		regionLabel.setPosition(20, Gdx.graphics.getHeight() - 40);
+		// UI del label de selección de región.
+		regionLabel = new Label("Selecciona una región", new Label.LabelStyle(FontManager.getFont("button"), Color.WHITE));
+		regionLabel.setPosition(20, Gdx.graphics.getHeight() - 50);
 		stage.addActor(regionLabel);
+
+		// UI del calendario y reloj.
+		dateLabel = new Label("...", skin, "button");
+		dateLabel.setColor(Color.WHITE);
+		dateLabel.setPosition(Gdx.graphics.getWidth() - 145, Gdx.graphics.getHeight() - 50);
+		stage.addActor(dateLabel);
+		
+		clockLabel = new Label("...", skin, "button");
+		clockLabel.setColor(Color.WHITE);
+		clockLabel.setPosition(Gdx.graphics.getWidth() - 78, Gdx.graphics.getHeight() - 85);
+		stage.addActor(clockLabel);
+
+		// Mostrar mensaje inicial con la nueva GameUI.
+		gameUI.showStandardDialog("Selecciona una región donde empezar el culto.");
 	}
 
 	@Override
@@ -74,58 +81,101 @@ public class GameScreen implements Screen {
 		Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
 		batch.begin();
 
-		// Dibujar el mapa base.
-		batch.draw(worldMap, 0, 0, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
+		// Actualizar el tiempo del juego.
+		gameClock.update();
+		dateLabel.setText(gameClock.getCurrentDate());
+		clockLabel.setText(gameClock.getCurrentTime());
 
-		// Obtener coordenadas del cursor.
-		int screenX = Gdx.input.getX();
-		int screenY = Gdx.graphics.getHeight() - Gdx.input.getY();
+		// Obtener la hora actual en el juego.
+		int currentHour = gameClock.getCurrentHour();
 
-		// Ajustar escala correctamente.
-		float scaleX = Gdx.graphics.getWidth() / (float) mapWidth;
-		float scaleY = Gdx.graphics.getHeight() / (float) mapHeight;
-		int pixelX = (int) (screenX / scaleX);
-		int pixelY = (int) (screenY / scaleY);
+		// Actualizar ciclo de día/noche.
+		dayNightCycleManager.update(delta, currentHour);
 
-		// Invertir Y para la máscara.
-		int correctedY = mapHeight - pixelY - 1; // Invertir Y para que el mapa no quede girado verticalmente.
+		// Obtener valores de interpolación y luces.
+		float dayAlpha = dayNightCycleManager.getDayAlpha();
+		float duskDawnAlpha = dayNightCycleManager.getDuskDawnAlpha();
+		float nightAlpha = dayNightCycleManager.getNightAlpha();
+		float lightsAlpha = dayNightCycleManager.getLightsAlpha();
+		float brightnessFactor = dayNightCycleManager.getBrightnessFactor();
 
-		// Detectar en qué región está el cursor.
-		selectedRegion = null;
-		for(Map.Entry<String, Pixmap> entry : regionPixmaps.entrySet()) {
-			String region = entry.getKey();
-			Pixmap pixmap = entry.getValue();
+		// Aplicar efecto de brillo en el mediodía.
+		batch.setColor(brightnessFactor, brightnessFactor * 0.95f, brightnessFactor * 0.95f, dayAlpha);
+		batch.draw(mapManager.getDayTexture(), 0, 0, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
 
-			if(pixelX >= 0 && pixelX < pixmap.getWidth() && correctedY >= 0 && correctedY < pixmap.getHeight()) {
-				int pixel = pixmap.getPixel(pixelX, correctedY);
-				int alpha = (pixel & 0xff); // Extrae el canal de transparencia.
+		// Dibujar el mapa de atardecer/amanecer con transición progresiva.
+		batch.setColor(brightnessFactor, 1, brightnessFactor * 0.95f, duskDawnAlpha);
+		batch.draw(mapManager.getDuskDawnTexture(), 0, 0, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
 
-				if(alpha > 50) { // Si el píxel es opaco, el cursor está sobre esta región.
-					selectedRegion = region;
-					break;
-				}
-			}
+		// Dibujar el mapa de noche con transición progresiva.
+		batch.setColor(0.45f, 0.47f, 0.6f, nightAlpha);
+		batch.draw(mapManager.getNightTexture(), 0, 0, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
+
+		// Restaurar color blanco
+		batch.setColor(Color.WHITE);
+
+		// Dibujar el mapa de luces.
+		if(lightsAlpha > 0.01f) {
+			batch.setColor(1, 1, 1, lightsAlpha);
+			batch.draw(mapManager.getLightsTexture(), 0, 0, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
+			batch.setColor(Color.WHITE);
 		}
 
-		// Dibujar la región seleccionada en rojo con transparencia.
-		if(selectedRegion != null) {
-			batch.setColor(0, 0, 0, 0.25f); // Rojo con opacidad.
-			batch.draw(regionTextures.get(selectedRegion), 0, 0, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
-			batch.setColor(Color.WHITE);
-			Gdx.graphics.setSystemCursor(SystemCursor.Hand);
-			
+		//System.out.println("Fecha y hora actual: " + clockLabel.getText() + " | Textura Mapa actual: " + (lightsAlpha > 0.35 ? "Noche" : "Día") + " | Luces (lightsAlpha): " + lightsAlpha);
+
+		// TODO Activar shader de efecto agua.
+		batch.setShader(waterShader.getShader());
+		waterShader.update(delta);
+		waterShader.apply();
+		batch.setShader(null);
+
+		// Actualizar hover de la región.
+		regionSelector.updateRegionHover();
+		hoveredRegion = regionSelector.getSelectedRegion();
+
+		// Efecto de hover para oscurecer la región.
+		if(hoveredRegion != null && selectedRegion == null) {
+			Texture regionTexture = mapManager.getRegionTexture(hoveredRegion);
+			if(regionTexture != null) {
+				batch.setColor(1, 1, 1, 0.25f);
+				batch.draw(regionTexture, 0, 0, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
+				batch.setColor(Color.WHITE);
+				Gdx.graphics.setSystemCursor(SystemCursor.Hand);
+			}
+
 		} else {
-		    Gdx.graphics.setSystemCursor(SystemCursor.Arrow);
+			Gdx.graphics.setSystemCursor(SystemCursor.Arrow);
+		}
+
+		// Si ya se ha seleccionado una región, marcarla con otro color.
+		if(selectedRegion != null) {
+			Texture regionTexture = mapManager.getRegionTexture(selectedRegion);
+			if(regionTexture != null) {
+				batch.setColor(0.3f, 0f, 0f, 0.5f); // Color translúcido.
+				batch.draw(regionTexture, 0, 0, Gdx.graphics.getWidth(), Gdx.graphics.getHeight());
+				batch.setColor(Color.WHITE);
+			}
 		}
 
 		batch.end();
 
-		// Mostrar el nombre de la región detectada.
-		if(selectedRegion != null) {
-			regionLabel.setText("Región: " + selectedRegion);
+		// Mostrar el nombre en español de la región detectada.
+		regionLabel.setText(hoveredRegion != null ? "Región: " + regionSelector.getSelectedRegionName() : "Selecciona una región");
 
-		} else {
-			regionLabel.setText("Selecciona una región");
+		// Detectar clic del jugador para seleccionar la región.
+		if(Gdx.input.justTouched()) {
+			if(!allowSelection) {
+				allowSelection = true;
+
+			} else if(hoveredRegion != null && selectedRegion == null) {
+				selectedRegion = hoveredRegion; 
+				game.setStartingRegion(selectedRegion);
+
+				// Mostrar cuadro de diálogo tras la selección.
+				gameUI.showTimedDialog("[RED]" + game.getCultName() + "[] ha surgido en " + RegionManager.getRegionName(game.getStartingRegion()), 3f);
+				//gameUI.showManualDialog("¡Evento importante! Se ha descubierto una nueva secta en tu región.");
+				//gameUI.showEventDialog("Gran Evento", "El gobierno ha comenzado a sospechar de tu culto.");
+			}
 		}
 
 		stage.act(delta);
@@ -133,22 +183,16 @@ public class GameScreen implements Screen {
 	}
 
 	@Override
-	public void resize(int width, int height) {
-		stage.getViewport().update(width, height, true);
-	}
-
-	@Override
 	public void dispose() {
 		batch.dispose();
-		worldMap.dispose();
-		for (Texture texture : regionTextures.values()) texture.dispose();
-		for (Pixmap pixmap : regionPixmaps.values()) pixmap.dispose();
+		mapManager.dispose();
+		waterShader.dispose();
 		stage.dispose();
 		skin.dispose();
 	}
 
 	@Override
-	public void show() {}
+	public void resize(int width, int height) {}
 
 	@Override
 	public void pause() {}
@@ -158,4 +202,7 @@ public class GameScreen implements Screen {
 
 	@Override
 	public void hide() {}
+
+	@Override
+	public void show() {}
 }

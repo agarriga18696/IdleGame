@@ -17,7 +17,7 @@ public class MainMenuScreen implements Screen {
 	// Constructor.
 	public MainMenuScreen(CultIdleGame game) {
 		this.game = game;
-		this.ui = new MainMenuUI(game);
+		this.ui = new MainMenuUI(game, game.getSkin());
 		Gdx.input.setInputProcessor(ui.getStage());
 		
 		// Evento al botón JUGAR.
